@@ -7,7 +7,7 @@ use crate::model::FsEntryKind;
 use crate::theme::{ThemePalette, current_theme};
 
 pub const HEADER_HEIGHT: u16 = 5;
-pub const FOOTER_HEIGHT: u16 = 6;
+pub const FOOTER_HEIGHT: u16 = 5;
 
 #[derive(Debug, Clone)]
 pub struct RowModel {
@@ -251,16 +251,17 @@ fn render_footer(
     theme: &ThemePalette,
 ) {
     let mut lines = Vec::new();
+    let header_subtle_style = theme.text_style().add_modifier(Modifier::DIM);
 
     if model.filter_mode {
         lines.push(Line::styled(
             format!("Filter (/): {}_", model.filter),
-            theme.accent_style(),
+            header_subtle_style,
         ));
     } else {
         lines.push(Line::styled(
             format!("Filter: {}", model.filter),
-            theme.muted_style(),
+            header_subtle_style,
         ));
     }
 
@@ -273,7 +274,6 @@ fn render_footer(
         quick_actions.push_str(" | d delete");
     }
     lines.push(Line::styled(quick_actions, theme.accent_style()));
-    lines.push(build_column_toggle_line(model, theme));
 
     lines.push(Line::styled(
         format!("Theme source: {}", theme.source()),
@@ -390,67 +390,6 @@ Help:\n\
         .wrap(Wrap { trim: true });
 
     frame.render_widget(dialog, area);
-}
-
-fn build_column_toggle_line(model: &ViewModel, theme: &ThemePalette) -> Line<'static> {
-    let mut spans = Vec::new();
-    spans.push(Span::styled("Columns (Shift+): ", theme.accent_style()));
-    append_column_toggle(
-        &mut spans,
-        "N",
-        "Name",
-        model.show_name_column,
-        false,
-        theme,
-    );
-    append_column_toggle(&mut spans, "K", "Kind", model.show_kind_column, true, theme);
-    append_column_toggle(&mut spans, "S", "Size", model.show_size_column, true, theme);
-    append_column_toggle(
-        &mut spans,
-        "R",
-        "Relative",
-        model.show_relative_column,
-        true,
-        theme,
-    );
-    append_column_toggle(&mut spans, "P", "Path", model.show_path_column, true, theme);
-    Line::from(spans)
-}
-
-fn append_column_toggle(
-    spans: &mut Vec<Span<'static>>,
-    key: &str,
-    label: &str,
-    enabled: bool,
-    prepend_separator: bool,
-    theme: &ThemePalette,
-) {
-    if prepend_separator {
-        spans.push(Span::styled(" | ", theme.accent_style()));
-    }
-
-    let label_style = if enabled {
-        theme.accent_style()
-    } else {
-        theme.muted_style()
-    };
-    let state = if enabled { "on" } else { "off" };
-    let key_style = hotkey_key_style(theme);
-    let mut chars = label.chars();
-    let first = chars.next();
-    let rest: String = chars.collect();
-
-    // btop-like cue: highlight the hotkey letter inside the label itself.
-    if let Some(first_char) = first {
-        if first_char.eq_ignore_ascii_case(&key.chars().next().unwrap_or(first_char)) {
-            spans.push(Span::styled(first_char.to_string(), key_style));
-            spans.push(Span::styled(format!("{rest}[{state}]"), label_style));
-            return;
-        }
-    }
-
-    spans.push(Span::styled(key.to_string(), key_style));
-    spans.push(Span::styled(format!(" {label}[{state}]"), label_style));
 }
 
 fn hotkey_key_style(theme: &ThemePalette) -> Style {
