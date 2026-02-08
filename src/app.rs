@@ -19,8 +19,9 @@ use crate::cli::Config;
 use crate::delete::delete_target;
 use crate::errors::AppError;
 use crate::model::{FsEntryKind, NodeSummary, ScanEvent, ScanProgress, SizeMetric, SortMode};
+use crate::platform::disk_usage;
 use crate::scanner::{ScanSession, start_scan};
-use crate::ui::{DialogStateView, RowModel, ViewModel};
+use crate::ui::{DialogStateView, FOOTER_HEIGHT, HEADER_HEIGHT, RowModel, ViewModel, format_bytes};
 
 const MAX_EVENTS_PER_TICK: usize = 8192;
 const SPINNER_FRAMES: [char; 4] = ['|', '/', '-', '\\'];
@@ -29,6 +30,7 @@ const MOUSE_SCROLL_STEP: isize = 1;
 const MOUSE_SCROLL_MIN_INTERVAL: Duration = Duration::from_millis(35);
 const POLL_INTERVAL_WHILE_SCANNING: Duration = Duration::from_millis(24);
 const POLL_INTERVAL_IDLE: Duration = Duration::from_millis(80);
+const DISK_INFO_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone)]
 enum ScanState {
@@ -99,6 +101,9 @@ pub struct App {
     last_frame_area: Rect,
     last_mouse_click: Option<(usize, Instant)>,
     last_mouse_scroll: Option<Instant>,
+    disk_line_cache: Option<String>,
+    disk_line_cache_root: Option<PathBuf>,
+    disk_line_last_update: Option<Instant>,
 }
 
 impl App {
@@ -127,6 +132,9 @@ impl App {
             last_frame_area: Rect::default(),
             last_mouse_click: None,
             last_mouse_scroll: None,
+            disk_line_cache: None,
+            disk_line_cache_root: None,
+            disk_line_last_update: None,
         }
     }
 
@@ -304,9 +312,9 @@ impl App {
 
     fn table_area(&self) -> Rect {
         let chunks = Layout::vertical([
-            Constraint::Length(3),
+            Constraint::Length(HEADER_HEIGHT),
             Constraint::Min(6),
-            Constraint::Length(5),
+            Constraint::Length(FOOTER_HEIGHT),
         ])
         .split(self.last_frame_area);
         chunks[1]
@@ -682,7 +690,7 @@ impl App {
         );
     }
 
-    fn build_view_model(&self) -> ViewModel {
+    fn build_view_model(&mut self) -> ViewModel {
         let rows: Vec<RowModel> = self
             .visible_node_paths()
             .into_iter()
@@ -714,6 +722,7 @@ impl App {
 
         ViewModel {
             current_root: self.current_root.to_string_lossy().into_owned(),
+            disk_line: self.current_disk_line(),
             metric: self.metric.as_str().to_string(),
             sort_mode: self.sort_mode.as_str().to_string(),
             scan_status: self.scan_state.as_status(),
@@ -752,6 +761,47 @@ impl App {
             help_modal_open: self.help_modal_open,
         }
     }
+
+    fn current_disk_line(&mut self) -> String {
+        let now = Instant::now();
+        let path_changed = self.disk_line_cache_root.as_ref() != Some(&self.current_root);
+        let stale = self
+            .disk_line_last_update
+            .map(|last| now.duration_since(last) >= DISK_INFO_REFRESH_INTERVAL)
+            .unwrap_or(true);
+
+        if path_changed || stale || self.disk_line_cache.is_none() {
+            self.disk_line_cache = Some(build_disk_line(&self.current_root));
+            self.disk_line_cache_root = Some(self.current_root.clone());
+            self.disk_line_last_update = Some(now);
+        }
+
+        self.disk_line_cache
+            .clone()
+            .unwrap_or_else(|| "Disk: unavailable".to_string())
+    }
+}
+
+fn build_disk_line(path: &Path) -> String {
+    let Some(usage) = disk_usage(path) else {
+        return "Disk: unavailable".to_string();
+    };
+
+    let total = usage.total_bytes;
+    let free = usage.available_bytes.min(total);
+    let used = total.saturating_sub(free);
+    let used_pct = if total == 0 {
+        0.0
+    } else {
+        (used as f64 / total as f64) * 100.0
+    };
+
+    format!(
+        "Disk: {} total | {} used ({used_pct:.1}%) | {} free",
+        format_bytes(total),
+        format_bytes(used),
+        format_bytes(free),
+    )
 }
 
 fn compute_scroll_offset(

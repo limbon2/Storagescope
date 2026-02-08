@@ -6,6 +6,9 @@ use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Wrap}
 use crate::model::FsEntryKind;
 use crate::theme::{ThemePalette, current_theme};
 
+pub const HEADER_HEIGHT: u16 = 5;
+pub const FOOTER_HEIGHT: u16 = 5;
+
 #[derive(Debug, Clone)]
 pub struct RowModel {
     pub name: String,
@@ -25,6 +28,7 @@ pub enum DialogStateView {
 #[derive(Debug, Clone)]
 pub struct ViewModel {
     pub current_root: String,
+    pub disk_line: String,
     pub metric: String,
     pub sort_mode: String,
     pub scan_status: String,
@@ -46,14 +50,15 @@ pub fn render(frame: &mut ratatui::Frame<'_>, model: &ViewModel) {
     let theme = current_theme();
 
     let chunks = Layout::vertical([
-        Constraint::Length(3),
+        Constraint::Length(HEADER_HEIGHT),
         Constraint::Min(6),
-        Constraint::Length(5),
+        Constraint::Length(FOOTER_HEIGHT),
     ])
     .split(frame.area());
 
     let header = Paragraph::new(vec![
         Line::styled(format!("Path: {}", model.current_root), theme.text_style()),
+        Line::styled(model.disk_line.clone(), theme.muted_style()),
         Line::styled(
             format!(
                 "Metric: {} | Sort: {} | Status: {}",
