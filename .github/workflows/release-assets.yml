@@ -70,7 +70,7 @@ jobs:
           "$hash  $prefix.zip" | Out-File -FilePath "dist/$prefix.zip.sha256" -Encoding ascii
 
       - name: Upload job artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: release-assets-${{ matrix.os }}
           path: dist/*
