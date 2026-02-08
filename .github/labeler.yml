@@ -1,0 +1,43 @@
+docs:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "*.md"
+          - "**/*.md"
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/workflows/**"
+
+dependencies:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "Cargo.toml"
+          - "Cargo.lock"
+
+scanner:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/scanner/**"
+
+tui:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/ui.rs"
+          - "src/theme.rs"
+
+core:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/app.rs"
+          - "src/cli.rs"
+          - "src/model.rs"
+          - "src/platform.rs"
+          - "src/delete.rs"
+          - "src/main.rs"
+          - "src/lib.rs"
+
+tests:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "tests/**"
