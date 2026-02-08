@@ -51,6 +51,7 @@ pub struct NodeSummary {
     pub apparent_bytes: u64,
     pub allocated_bytes: u64,
     pub children_count: u64,
+    pub is_complete: bool,
     pub last_updated: SystemTime,
 }
 

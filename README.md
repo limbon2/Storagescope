@@ -11,6 +11,8 @@ TreeSize-like terminal disk usage analyzer.
 - Hidden entries included by default.
 - Directory rows by default for better performance on huge trees (`--show-files true` to include files).
 - Same-filesystem traversal by default.
+- Navigation reuses in-memory scan data instead of rescanning on every folder change.
+- Live loading indicators in table/footer while scan results are still streaming in.
 - Guarded delete flow (`DELETE` typed confirmation).
 
 ## Run
@@ -36,5 +38,6 @@ For very large scans (`/`, large home dirs), keep `--show-files false` and optio
 - `m`: toggle metric
 - `r`: rescan current path
 - `/`: type filter
+- `?` / `F1`: open help modal
 - `d`: delete selected entry (unless `--no-delete`)
 - `q`: quit

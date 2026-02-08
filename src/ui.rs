@@ -1,6 +1,6 @@
 use std::cmp;
 
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Wrap};
@@ -13,6 +13,7 @@ pub struct RowModel {
     pub kind: FsEntryKind,
     pub size_bytes: u64,
     pub path_display: String,
+    pub is_loading: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -36,13 +37,16 @@ pub struct ViewModel {
     pub message_line: Option<String>,
     pub delete_enabled: bool,
     pub dialog: DialogStateView,
+    pub loading_hint: Option<String>,
+    pub live_loading_line: Option<String>,
+    pub help_modal_open: bool,
 }
 
 pub fn render(frame: &mut ratatui::Frame<'_>, model: &ViewModel) {
     let chunks = Layout::vertical([
         Constraint::Length(3),
         Constraint::Min(6),
-        Constraint::Length(3),
+        Constraint::Length(5),
     ])
     .split(frame.area());
 
@@ -62,9 +66,32 @@ pub fn render(frame: &mut ratatui::Frame<'_>, model: &ViewModel) {
     if !matches!(model.dialog, DialogStateView::None) {
         render_delete_dialog(frame, model);
     }
+
+    if model.help_modal_open {
+        render_help_dialog(frame, model);
+    }
 }
 
 fn render_table(frame: &mut ratatui::Frame<'_>, area: Rect, model: &ViewModel) {
+    if model.rows.is_empty() {
+        let text = model
+            .loading_hint
+            .clone()
+            .unwrap_or_else(|| "No entries to display for this path/filter.".to_string());
+
+        let empty = Paragraph::new(text)
+            .alignment(Alignment::Center)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Children (drill down with Enter)"),
+            )
+            .wrap(Wrap { trim: true });
+
+        frame.render_widget(empty, area);
+        return;
+    }
+
     let max_size = model
         .rows
         .iter()
@@ -79,13 +106,20 @@ fn render_table(frame: &mut ratatui::Frame<'_>, area: Rect, model: &ViewModel) {
                 .fg(Color::Black)
                 .bg(Color::Cyan)
                 .add_modifier(Modifier::BOLD)
+        } else if row.is_loading {
+            Style::default().fg(Color::Yellow)
         } else {
             Style::default()
         };
 
         let bar = make_bar(row.size_bytes, max_size, 18);
+        let name = if row.is_loading {
+            format!("{} [loading]", row.name)
+        } else {
+            row.name.clone()
+        };
         let row_cells = vec![
-            Cell::from(row.name.clone()),
+            Cell::from(name),
             Cell::from(row.kind.to_string()),
             Cell::from(format_bytes(row.size_bytes)),
             Cell::from(bar),
@@ -126,18 +160,23 @@ fn render_footer(frame: &mut ratatui::Frame<'_>, area: Rect, model: &ViewModel) 
         lines.push(Line::from(format!("Filter: {}", model.filter)));
     }
 
-    let mut hotkeys = String::from(
-        "Keys: j/k move | Enter open | h/back go up | s sort | m metric | r rescan | / filter | q quit",
-    );
+    lines.push(Line::from(
+        "Legend: ?/F1 help | q quit | j/k move | Enter open | h/back up | / filter",
+    ));
+    let mut quick_actions = String::from("Actions: s sort | m metric | r rescan");
     if model.delete_enabled {
-        hotkeys.push_str(" | d delete");
+        quick_actions.push_str(" | d delete");
     }
-    lines.push(Line::from(hotkeys));
+    lines.push(Line::from(quick_actions));
 
     if let Some(message) = &model.message_line {
         lines.push(Line::from(message.clone()));
     } else if let Some(warning) = &model.warning_line {
         lines.push(Line::from(format!("Warning: {warning}")));
+    }
+
+    if let Some(live_line) = &model.live_loading_line {
+        lines.push(Line::from(live_line.clone()));
     }
 
     let footer = Paragraph::new(lines)
@@ -169,6 +208,50 @@ fn render_delete_dialog(frame: &mut ratatui::Frame<'_>, model: &ViewModel) {
                 .title("Delete Confirmation")
                 .borders(Borders::ALL)
                 .style(Style::default().fg(Color::Red)),
+        )
+        .wrap(Wrap { trim: true });
+
+    frame.render_widget(dialog, area);
+}
+
+fn render_help_dialog(frame: &mut ratatui::Frame<'_>, model: &ViewModel) {
+    let area = centered_rect(80, 80, frame.area());
+    frame.render_widget(Clear, area);
+
+    let delete_line = if model.delete_enabled {
+        "d: delete selected item (requires typing DELETE)"
+    } else {
+        "d: delete is disabled in this session (--no-delete)"
+    };
+
+    let text = format!(
+        "StorageScope Help\n\n\
+Navigation:\n\
+  j / k or Up / Down: move selection\n\
+  Enter: open selected directory\n\
+  h or Backspace: go to parent directory\n\n\
+Scan and View:\n\
+  r: rescan current path\n\
+  s: cycle sort mode\n\
+  m: toggle size metric (allocated/apparent)\n\
+  /: filter by name/path\n\
+  Esc: clear filter or close dialog\n\n\
+Safety:\n\
+  {delete_line}\n\n\
+Loading Indicators:\n\
+  [loading] on a row means directory size is still being calculated\n\
+  Footer spinner means scan is still in progress and rows may update\n\n\
+Help:\n\
+  ? or F1: open/close this help\n\
+  q: quit app (or close help when this modal is open)"
+    );
+
+    let dialog = Paragraph::new(text)
+        .block(
+            Block::default()
+                .title("Help")
+                .borders(Borders::ALL)
+                .style(Style::default().fg(Color::White)),
         )
         .wrap(Wrap { trim: true });
 

@@ -19,6 +19,7 @@ use crate::scanner::{ScanSession, start_scan};
 use crate::ui::{DialogStateView, RowModel, ViewModel};
 
 const MAX_EVENTS_PER_TICK: usize = 2048;
+const SPINNER_FRAMES: [char; 4] = ['|', '/', '-', '\\'];
 
 #[derive(Debug, Clone)]
 enum ScanState {
@@ -45,6 +46,17 @@ impl ScanState {
             Self::Cancelled => "cancelled".to_string(),
         }
     }
+
+    fn is_scanning(&self) -> bool {
+        matches!(self, Self::Scanning(_))
+    }
+
+    fn progress(&self) -> Option<&ScanProgress> {
+        match self {
+            Self::Scanning(progress) | Self::Complete(progress) => Some(progress),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -58,6 +70,7 @@ pub struct App {
     config: Config,
     startup_root: PathBuf,
     current_root: PathBuf,
+    active_scan_root: Option<PathBuf>,
     nodes: HashMap<PathBuf, NodeSummary>,
     children: HashMap<PathBuf, Vec<PathBuf>>,
     selected_index: usize,
@@ -71,6 +84,8 @@ pub struct App {
     scanner: Option<ScanSession>,
     quit: bool,
     delete_dialog: DeleteDialog,
+    help_modal_open: bool,
+    spinner_tick: usize,
 }
 
 impl App {
@@ -78,6 +93,7 @@ impl App {
         Self {
             startup_root: config.startup_root.clone(),
             current_root: config.startup_root.clone(),
+            active_scan_root: None,
             metric: config.initial_metric,
             sort_mode: SortMode::SizeDesc,
             config,
@@ -92,11 +108,13 @@ impl App {
             scanner: None,
             quit: false,
             delete_dialog: DeleteDialog::None,
+            help_modal_open: false,
+            spinner_tick: 0,
         }
     }
 
     pub fn run(&mut self) -> Result<(), AppError> {
-        self.start_scan();
+        self.start_scan_at(self.startup_root.clone());
 
         enable_raw_mode().map_err(|error| AppError::Terminal(error.to_string()))?;
         let mut stdout = io::stdout();
@@ -122,6 +140,7 @@ impl App {
     ) -> Result<(), AppError> {
         while !self.quit {
             self.drain_scan_events();
+            self.spinner_tick = self.spinner_tick.wrapping_add(1);
 
             let model = self.build_view_model();
             terminal
@@ -144,21 +163,43 @@ impl App {
         Ok(())
     }
 
-    fn start_scan(&mut self) {
+    fn start_scan_at(&mut self, root: PathBuf) {
         if let Some(mut scan) = self.scanner.take() {
             scan.stop();
         }
 
-        self.nodes.clear();
-        self.children.clear();
+        self.prune_subtree(&root);
         self.warnings.clear();
         self.selected_index = 0;
         self.scan_state = ScanState::Scanning(ScanProgress::default());
+        self.active_scan_root = Some(root.clone());
 
         let mut options = self.config.scan_options.clone();
-        options.root = self.current_root.clone();
+        options.root = root;
 
         self.scanner = Some(start_scan(options));
+    }
+
+    fn prune_subtree(&mut self, root: &Path) {
+        let to_remove: Vec<PathBuf> = self
+            .nodes
+            .keys()
+            .filter(|path| Self::in_subtree(path, root))
+            .cloned()
+            .collect();
+
+        for path in &to_remove {
+            self.nodes.remove(path);
+            self.children.remove(path);
+        }
+
+        for child_paths in self.children.values_mut() {
+            child_paths.retain(|path| !Self::in_subtree(path, root));
+        }
+    }
+
+    fn in_subtree(path: &Path, root: &Path) -> bool {
+        path == root || path.starts_with(root)
     }
 
     fn drain_scan_events(&mut self) {
@@ -179,11 +220,7 @@ impl App {
 
             match event {
                 ScanEvent::Reset { root } => {
-                    self.current_root = root;
-                    self.nodes.clear();
-                    self.children.clear();
-                    self.warnings.clear();
-                    self.selected_index = 0;
+                    self.active_scan_root = Some(root);
                     self.scan_state = ScanState::Scanning(ScanProgress::default());
                 }
                 ScanEvent::NodeUpdated(node) => self.upsert_node(node),
@@ -195,16 +232,19 @@ impl App {
                 }
                 ScanEvent::Complete(progress) => {
                     self.scan_state = ScanState::Complete(progress);
+                    self.active_scan_root = None;
                     should_stop_scanner = true;
                     break;
                 }
                 ScanEvent::Error(message) => {
                     self.scan_state = ScanState::Error(message);
+                    self.active_scan_root = None;
                     should_stop_scanner = true;
                     break;
                 }
                 ScanEvent::Cancelled => {
                     self.scan_state = ScanState::Cancelled;
+                    self.active_scan_root = None;
                     should_stop_scanner = true;
                     break;
                 }
@@ -233,6 +273,16 @@ impl App {
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Result<(), AppError> {
+        if self.help_modal_open {
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('?') | KeyCode::F(1) | KeyCode::Char('q') => {
+                    self.help_modal_open = false;
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
+
         if self.handle_delete_dialog_key(&key)? {
             return Ok(());
         }
@@ -253,8 +303,9 @@ impl App {
                 self.ensure_selection_in_bounds();
             }
             KeyCode::Char('m') => self.metric = self.metric.toggle(),
-            KeyCode::Char('r') => self.start_scan(),
+            KeyCode::Char('r') => self.start_scan_at(self.current_root.clone()),
             KeyCode::Char('/') => self.filter_mode = true,
+            KeyCode::Char('?') | KeyCode::F(1) => self.help_modal_open = true,
             KeyCode::Esc => {
                 self.filter.clear();
                 self.message = None;
@@ -330,7 +381,7 @@ impl App {
                                     self.message =
                                         Some(format!("Deleted {}", target.to_string_lossy()));
                                     self.delete_dialog = DeleteDialog::None;
-                                    self.start_scan();
+                                    self.start_scan_at(self.current_root.clone());
                                 }
                                 Err(error) => {
                                     self.message = Some(error.to_string());
@@ -365,7 +416,8 @@ impl App {
         if let Some(node) = self.selected_node() {
             if matches!(node.kind, FsEntryKind::Dir | FsEntryKind::Symlink) {
                 self.current_root = node.path.clone();
-                self.start_scan();
+                self.selected_index = 0;
+                self.ensure_selection_in_bounds();
             }
         }
     }
@@ -377,7 +429,8 @@ impl App {
 
         if let Some(parent) = self.current_root.parent() {
             self.current_root = parent.to_path_buf();
-            self.start_scan();
+            self.selected_index = 0;
+            self.ensure_selection_in_bounds();
         }
     }
 
@@ -461,7 +514,7 @@ impl App {
     }
 
     fn build_view_model(&self) -> ViewModel {
-        let rows = self
+        let rows: Vec<RowModel> = self
             .visible_node_paths()
             .into_iter()
             .filter_map(|path| self.nodes.get(&path))
@@ -474,8 +527,10 @@ impl App {
                 kind: node.kind,
                 size_bytes: node.metric_bytes(self.metric),
                 path_display: node.path.to_string_lossy().into_owned(),
+                is_loading: !node.is_complete,
             })
             .collect();
+        let show_loading_hint = rows.is_empty() && self.scan_state.is_scanning();
 
         let dialog = match &self.delete_dialog {
             DeleteDialog::None => DialogStateView::None,
@@ -501,6 +556,30 @@ impl App {
             message_line: self.message.clone(),
             delete_enabled: !self.config.no_delete,
             dialog,
+            loading_hint: if show_loading_hint {
+                let spinner = SPINNER_FRAMES[self.spinner_tick % SPINNER_FRAMES.len()];
+                let progress = self.scan_state.progress().cloned().unwrap_or_default();
+                Some(format!(
+                    "{spinner} scanning... visited {} entries, warnings {}",
+                    progress.visited_entries, progress.warnings
+                ))
+            } else {
+                None
+            },
+            live_loading_line: if self.scan_state.is_scanning() {
+                let spinner = SPINNER_FRAMES[self.spinner_tick % SPINNER_FRAMES.len()];
+                let root = self
+                    .active_scan_root
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| self.current_root.to_string_lossy().into_owned());
+                Some(format!(
+                    "{spinner} live scan in progress for {root}; results update as they are discovered"
+                ))
+            } else {
+                None
+            },
+            help_modal_open: self.help_modal_open,
         }
     }
 }

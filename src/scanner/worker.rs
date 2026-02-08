@@ -200,6 +200,7 @@ fn scan_entry(path: &Path, depth: usize, state: &mut ScannerState<'_>) -> ScanCo
             apparent_bytes: apparent,
             allocated_bytes: allocated,
             children_count: 0,
+            is_complete: true,
             last_updated: SystemTime::now(),
         };
         if state.options.show_files {
@@ -246,6 +247,7 @@ fn scan_entry(path: &Path, depth: usize, state: &mut ScannerState<'_>) -> ScanCo
             apparent_bytes: apparent,
             allocated_bytes: allocated,
             children_count: 0,
+            is_complete: true,
             last_updated: SystemTime::now(),
         };
         if state.options.show_files {
@@ -268,6 +270,7 @@ fn scan_entry(path: &Path, depth: usize, state: &mut ScannerState<'_>) -> ScanCo
         apparent_bytes: apparent,
         allocated_bytes: allocated,
         children_count: 0,
+        is_complete: true,
         last_updated: SystemTime::now(),
     };
     if state.options.show_files {
@@ -305,6 +308,21 @@ fn scan_dir(
     let dir_apparent = metadata.len();
     let dir_allocated = allocated_size(path, metadata);
 
+    let initial_summary = NodeSummary {
+        path: path.to_path_buf(),
+        kind: if is_symlink_dir {
+            FsEntryKind::Symlink
+        } else {
+            FsEntryKind::Dir
+        },
+        apparent_bytes: dir_apparent,
+        allocated_bytes: dir_allocated,
+        children_count: 0,
+        is_complete: false,
+        last_updated: SystemTime::now(),
+    };
+    state.send_event(ScanEvent::NodeUpdated(initial_summary));
+
     let read_dir = match fs::read_dir(path) {
         Ok(rd) => rd,
         Err(error) => {
@@ -319,6 +337,7 @@ fn scan_dir(
                 apparent_bytes: dir_apparent,
                 allocated_bytes: dir_allocated,
                 children_count: 0,
+                is_complete: true,
                 last_updated: SystemTime::now(),
             };
             state.bump_entry(summary.apparent_bytes, summary.allocated_bytes);
@@ -371,6 +390,7 @@ fn scan_dir(
         apparent_bytes: apparent_total,
         allocated_bytes: allocated_total,
         children_count,
+        is_complete: true,
         last_updated: SystemTime::now(),
     };
 
