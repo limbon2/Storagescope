@@ -1,0 +1,111 @@
+name: Release Assets
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing release tag to upload artifacts to (for example: v0.1.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Package artifact (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(grep '^version = ' Cargo.toml | head -n1 | cut -d '"' -f2)
+          TARGET=$(rustc -vV | awk '/^host:/ {print $2}')
+          PREFIX="storagescope-v${VERSION}-${TARGET}"
+
+          mkdir -p "dist/${PREFIX}"
+          cp target/release/storagescope "dist/${PREFIX}/"
+          cp README.md LICENSE "dist/${PREFIX}/"
+
+          tar -C dist -czf "dist/${PREFIX}.tar.gz" "${PREFIX}"
+          shasum -a 256 "dist/${PREFIX}.tar.gz" > "dist/${PREFIX}.tar.gz.sha256"
+
+      - name: Package artifact (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          $target = (& rustc -vV | Select-String '^host:\s+(.+)$').Matches[0].Groups[1].Value
+          $prefix = "storagescope-v$version-$target"
+
+          New-Item -ItemType Directory -Path "dist/$prefix" -Force | Out-Null
+          Copy-Item "target/release/storagescope.exe" "dist/$prefix/"
+          Copy-Item README.md, LICENSE "dist/$prefix/"
+
+          Compress-Archive -Path "dist/$prefix/*" -DestinationPath "dist/$prefix.zip" -Force
+
+          $hash = (Get-FileHash "dist/$prefix.zip" -Algorithm SHA256).Hash.ToLower()
+          "$hash  $prefix.zip" | Out-File -FilePath "dist/$prefix.zip.sha256" -Encoding ascii
+
+      - name: Upload job artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-${{ matrix.os }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Upload assets to release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Resolve release tag
+        id: tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "value=${{ github.event.inputs.release_tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.value }}
+          files: |
+            dist/**/*.tar.gz
+            dist/**/*.tar.gz.sha256
+            dist/**/*.zip
+            dist/**/*.zip.sha256
+          fail_on_unmatched_files: true
+          overwrite_files: true
