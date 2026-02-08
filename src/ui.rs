@@ -1,7 +1,6 @@
-use std::cmp;
-
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
-use ratatui::text::Line;
+use ratatui::style::Style;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Wrap};
 
 use crate::model::FsEntryKind;
@@ -33,6 +32,7 @@ pub struct ViewModel {
     pub filter_mode: bool,
     pub rows: Vec<RowModel>,
     pub selected_index: usize,
+    pub table_scroll_offset: usize,
     pub warning_line: Option<String>,
     pub message_line: Option<String>,
     pub delete_enabled: bool,
@@ -121,32 +121,42 @@ fn render_table(
         .max()
         .unwrap_or(1);
 
-    let rows = model.rows.iter().enumerate().map(|(idx, row)| {
-        let selected = idx == model.selected_index;
-        let style = if selected {
-            theme.selected_style()
-        } else if row.is_loading {
-            theme.loading_style()
-        } else {
-            theme.text_style()
-        };
+    let visible_rows = area.height.saturating_sub(3) as usize;
+    let start = model
+        .table_scroll_offset
+        .min(model.rows.len().saturating_sub(1));
+    let rows = model
+        .rows
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(visible_rows)
+        .map(|(idx, row)| {
+            let selected = idx == model.selected_index;
+            let style = if selected {
+                theme.selected_style()
+            } else if row.is_loading {
+                theme.loading_style()
+            } else {
+                theme.text_style()
+            };
 
-        let bar = make_bar(row.size_bytes, max_size, 18);
-        let name = if row.is_loading {
-            format!("{} [loading]", row.name)
-        } else {
-            row.name.clone()
-        };
-        let row_cells = vec![
-            Cell::from(name),
-            Cell::from(row.kind.to_string()),
-            Cell::from(format_bytes(row.size_bytes)),
-            Cell::from(bar),
-            Cell::from(row.path_display.clone()),
-        ];
+            let bar = make_bar_line(row.size_bytes, max_size, 18, theme, selected);
+            let name = if row.is_loading {
+                format!("{} [loading]", row.name)
+            } else {
+                row.name.clone()
+            };
+            let row_cells = vec![
+                Cell::from(name),
+                Cell::from(row.kind.to_string()),
+                Cell::from(format_bytes(row.size_bytes)),
+                Cell::from(bar),
+                Cell::from(row.path_display.clone()),
+            ];
 
-        Row::new(row_cells).style(style)
-    });
+            Row::new(row_cells).style(style)
+        });
 
     let widths = [
         Constraint::Length(28),
@@ -334,16 +344,85 @@ pub fn format_bytes(bytes: u64) -> String {
     }
 }
 
-fn make_bar(value: u64, max: u64, width: usize) -> String {
-    if max == 0 || width == 0 {
-        return String::new();
+fn make_bar_line(
+    value: u64,
+    max: u64,
+    width: usize,
+    theme: &ThemePalette,
+    selected: bool,
+) -> Line<'static> {
+    if width == 0 {
+        return Line::default();
     }
-    let ratio = value as f64 / max as f64;
-    let filled = cmp::max(1, (ratio * width as f64).round() as usize).min(width);
-    let mut out = String::with_capacity(width);
-    out.push_str(&"#".repeat(filled));
-    out.push_str(&".".repeat(width - filled));
-    out
+
+    let total_units = width * 8;
+    let mut filled_units = if max == 0 || value == 0 {
+        0
+    } else {
+        ((value as f64 / max as f64) * total_units as f64).round() as usize
+    };
+    if value > 0 && filled_units == 0 {
+        filled_units = 1;
+    }
+    if filled_units > total_units {
+        filled_units = total_units;
+    }
+
+    let full_blocks = filled_units / 8;
+    let partial_block = filled_units % 8;
+    let position_ratio = |idx: usize| -> f64 {
+        if width <= 1 {
+            0.0
+        } else {
+            idx as f64 / (width - 1) as f64
+        }
+    };
+    const PARTIALS: [char; 7] = ['▏', '▎', '▍', '▌', '▋', '▊', '▉'];
+
+    let mut spans = Vec::with_capacity(width);
+    if selected && !theme.uses_reverse_selection() {
+        let bg = theme
+            .selected_background_color()
+            .unwrap_or(theme.bar_track_color());
+        let track_style = Style::default().bg(bg);
+
+        for idx in 0..width {
+            if idx < full_blocks {
+                let fill_style = Style::default().bg(theme.bar_fill_color(position_ratio(idx)));
+                spans.push(Span::styled(" ", fill_style));
+            } else if idx == full_blocks && partial_block > 0 && full_blocks < width {
+                let fill = theme.bar_fill_color(position_ratio(idx));
+                let partial_style = Style::default().fg(fill).bg(bg);
+                spans.push(Span::styled(
+                    PARTIALS[partial_block - 1].to_string(),
+                    partial_style,
+                ));
+            } else {
+                spans.push(Span::styled(" ", track_style));
+            }
+        }
+
+        return Line::from(spans);
+    }
+
+    let track_style = Style::default().bg(theme.bar_track_color());
+    for idx in 0..width {
+        if idx < full_blocks {
+            let fill_style = Style::default().bg(theme.bar_fill_color(position_ratio(idx)));
+            spans.push(Span::styled(" ", fill_style));
+        } else if idx == full_blocks && partial_block > 0 && full_blocks < width {
+            let fill = theme.bar_fill_color(position_ratio(idx));
+            let partial_style = Style::default().fg(fill).bg(theme.bar_track_color());
+            spans.push(Span::styled(
+                PARTIALS[partial_block - 1].to_string(),
+                partial_style,
+            ));
+        } else {
+            spans.push(Span::styled(" ", track_style));
+        }
+    }
+
+    Line::from(spans)
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
@@ -364,12 +443,26 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
 
 #[cfg(test)]
 mod tests {
-    use super::format_bytes;
+    use super::{format_bytes, make_bar_line};
+    use crate::theme::current_theme;
 
     #[test]
     fn formats_bytes() {
         assert_eq!(format_bytes(0), "0 B");
         assert_eq!(format_bytes(12), "12 B");
         assert_eq!(format_bytes(2048), "2.0 KB");
+    }
+
+    #[test]
+    fn renders_pretty_bar() {
+        let theme = current_theme();
+        let mid = make_bar_line(50, 100, 10, &theme, false);
+        assert_eq!(mid.width(), 10);
+
+        let empty = make_bar_line(0, 100, 8, &theme, false);
+        assert_eq!(empty.width(), 8);
+
+        let full = make_bar_line(100, 100, 6, &theme, false);
+        assert_eq!(full.width(), 6);
     }
 }

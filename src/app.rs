@@ -81,6 +81,7 @@ pub struct App {
     nodes: HashMap<PathBuf, NodeSummary>,
     children: HashMap<PathBuf, Vec<PathBuf>>,
     selected_index: usize,
+    table_scroll_offset: usize,
     sort_mode: SortMode,
     metric: SizeMetric,
     filter: String,
@@ -110,6 +111,7 @@ impl App {
             nodes: HashMap::new(),
             children: HashMap::new(),
             selected_index: 0,
+            table_scroll_offset: 0,
             filter: String::new(),
             filter_mode: false,
             warnings: Vec::new(),
@@ -264,13 +266,7 @@ impl App {
     }
 
     fn point_in_table(&self, column: u16, row: u16) -> bool {
-        let chunks = Layout::vertical([
-            Constraint::Length(3),
-            Constraint::Min(6),
-            Constraint::Length(5),
-        ])
-        .split(self.last_frame_area);
-        let table = chunks[1];
+        let table = self.table_area();
 
         column >= table.x
             && column < table.x.saturating_add(table.width)
@@ -279,13 +275,7 @@ impl App {
     }
 
     fn mouse_row_to_index(&self, column: u16, row: u16) -> Option<usize> {
-        let chunks = Layout::vertical([
-            Constraint::Length(3),
-            Constraint::Min(6),
-            Constraint::Length(5),
-        ])
-        .split(self.last_frame_area);
-        let table = chunks[1];
+        let table = self.table_area();
 
         if table.width <= 2 || table.height <= 3 {
             return None;
@@ -300,9 +290,24 @@ impl App {
             return None;
         }
 
-        let index = (row - data_top) as usize;
+        let relative_index = (row - data_top) as usize;
+        let index = self.table_scroll_offset.saturating_add(relative_index);
         let len = self.visible_node_paths().len();
         (index < len).then_some(index)
+    }
+
+    fn table_area(&self) -> Rect {
+        let chunks = Layout::vertical([
+            Constraint::Length(3),
+            Constraint::Min(6),
+            Constraint::Length(5),
+        ])
+        .split(self.last_frame_area);
+        chunks[1]
+    }
+
+    fn table_visible_rows(&self) -> usize {
+        self.table_area().height.saturating_sub(3) as usize
     }
 
     fn start_scan_at(&mut self, root: PathBuf) {
@@ -313,6 +318,7 @@ impl App {
         self.prune_subtree(&root);
         self.warnings.clear();
         self.selected_index = 0;
+        self.table_scroll_offset = 0;
         self.scan_state = ScanState::Scanning(ScanProgress::default());
         self.active_scan_root = Some(root.clone());
 
@@ -545,6 +551,7 @@ impl App {
         let len = self.visible_node_paths().len();
         if len == 0 {
             self.selected_index = 0;
+            self.table_scroll_offset = 0;
             return;
         }
 
@@ -552,6 +559,7 @@ impl App {
         let max = (len - 1) as isize;
         let next = (current + delta).clamp(0, max);
         self.selected_index = next as usize;
+        self.sync_table_scroll(len);
     }
 
     fn drill_into_selection(&mut self) {
@@ -650,9 +658,22 @@ impl App {
         let len = self.visible_node_paths().len();
         if len == 0 {
             self.selected_index = 0;
+            self.table_scroll_offset = 0;
         } else if self.selected_index >= len {
             self.selected_index = len - 1;
+            self.sync_table_scroll(len);
+        } else {
+            self.sync_table_scroll(len);
         }
+    }
+
+    fn sync_table_scroll(&mut self, len: usize) {
+        self.table_scroll_offset = compute_scroll_offset(
+            self.table_scroll_offset,
+            self.selected_index,
+            len,
+            self.table_visible_rows(),
+        );
     }
 
     fn build_view_model(&self) -> ViewModel {
@@ -694,6 +715,7 @@ impl App {
             filter_mode: self.filter_mode,
             rows,
             selected_index: self.selected_index,
+            table_scroll_offset: self.table_scroll_offset,
             warning_line: self.warnings.last().cloned(),
             message_line: self.message.clone(),
             delete_enabled: !self.config.no_delete,
@@ -723,5 +745,58 @@ impl App {
             },
             help_modal_open: self.help_modal_open,
         }
+    }
+}
+
+fn compute_scroll_offset(
+    current_offset: usize,
+    selected_index: usize,
+    len: usize,
+    visible_rows: usize,
+) -> usize {
+    if len == 0 {
+        return 0;
+    }
+
+    if visible_rows == 0 {
+        return selected_index.min(len - 1);
+    }
+
+    let max_offset = len.saturating_sub(visible_rows);
+    let mut offset = current_offset.min(max_offset);
+
+    if selected_index < offset {
+        offset = selected_index;
+    } else if selected_index >= offset.saturating_add(visible_rows) {
+        offset = selected_index
+            .saturating_add(1)
+            .saturating_sub(visible_rows);
+    }
+
+    offset.min(max_offset)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compute_scroll_offset;
+
+    #[test]
+    fn keeps_selection_visible_when_moving_down() {
+        assert_eq!(compute_scroll_offset(0, 0, 100, 5), 0);
+        assert_eq!(compute_scroll_offset(0, 4, 100, 5), 0);
+        assert_eq!(compute_scroll_offset(0, 5, 100, 5), 1);
+        assert_eq!(compute_scroll_offset(1, 6, 100, 5), 2);
+    }
+
+    #[test]
+    fn clamps_offset_for_small_lists() {
+        assert_eq!(compute_scroll_offset(9, 1, 3, 10), 0);
+        assert_eq!(compute_scroll_offset(4, 2, 3, 2), 1);
+    }
+
+    #[test]
+    fn handles_zero_visible_rows() {
+        assert_eq!(compute_scroll_offset(0, 7, 10, 0), 7);
+        assert_eq!(compute_scroll_offset(3, 2, 0, 0), 0);
     }
 }

@@ -15,6 +15,7 @@ pub struct ThemePalette {
     foreground: Color,
     accent: Color,
     muted: Color,
+    success: Color,
     warning: Color,
     danger: Color,
     loading: Color,
@@ -43,6 +44,7 @@ impl ThemePalette {
             foreground: Color::Reset,
             accent: Color::Reset,
             muted: Color::Reset,
+            success: Color::Reset,
             warning: Color::Reset,
             danger: Color::Reset,
             loading: Color::Reset,
@@ -71,6 +73,11 @@ impl ThemePalette {
             .or_else(|| map.get("color7"))
             .copied()
             .unwrap_or(Color::DarkGray);
+        let success = map
+            .get("color2")
+            .or_else(|| map.get("color10"))
+            .copied()
+            .unwrap_or(Color::Green);
         let warning = map.get("color3").copied().unwrap_or(Color::Yellow);
         let danger = map.get("color1").copied().unwrap_or(Color::Red);
         let loading = map
@@ -91,6 +98,7 @@ impl ThemePalette {
             foreground,
             accent,
             muted,
+            success,
             warning,
             danger,
             loading,
@@ -110,6 +118,7 @@ impl ThemePalette {
                 foreground: Color::Reset,
                 accent: Color::Blue,
                 muted: Color::DarkGray,
+                success: Color::Green,
                 warning: Color::Red,
                 danger: Color::Red,
                 loading: Color::Blue,
@@ -124,6 +133,7 @@ impl ThemePalette {
                 foreground: Color::Reset,
                 accent: Color::Cyan,
                 muted: Color::DarkGray,
+                success: Color::Green,
                 warning: Color::Yellow,
                 danger: Color::Red,
                 loading: Color::Green,
@@ -177,6 +187,28 @@ impl ThemePalette {
         self.accent_style().add_modifier(Modifier::BOLD)
     }
 
+    pub fn bar_track_color(&self) -> Color {
+        self.muted
+    }
+
+    pub fn bar_fill_color(&self, position_ratio: f64) -> Color {
+        let t = position_ratio.clamp(0.0, 1.0);
+
+        // Build a smoother, btop-like ramp so narrow bars do not look like
+        // three hard color blocks.
+        let warm_low = blend_two_colors(self.success, self.warning, 0.35);
+        let warm_high = blend_two_colors(self.warning, self.danger, 0.45);
+        let stops = [
+            (0.0, self.success),
+            (0.24, warm_low),
+            (0.55, self.warning),
+            (0.82, warm_high),
+            (1.0, self.danger),
+        ];
+
+        blend_color_stops(&stops, t)
+    }
+
     pub fn warning_style(&self) -> Style {
         if self.use_color {
             Style::default().fg(self.warning)
@@ -205,12 +237,29 @@ impl ThemePalette {
         if self.reverse_selection {
             Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD)
         } else {
-            let selection_fg = adaptive_selected_foreground(self.selection_fg, self.selection_bg);
+            let selection_fg = self
+                .selected_foreground_color()
+                .unwrap_or(self.selection_fg);
             Style::default()
                 .fg(selection_fg)
                 .bg(self.selection_bg)
                 .add_modifier(Modifier::BOLD)
         }
+    }
+
+    pub fn uses_reverse_selection(&self) -> bool {
+        self.reverse_selection
+    }
+
+    pub fn selected_background_color(&self) -> Option<Color> {
+        (!self.reverse_selection).then_some(self.selection_bg)
+    }
+
+    pub fn selected_foreground_color(&self) -> Option<Color> {
+        (!self.reverse_selection).then_some(adaptive_selected_foreground(
+            self.selection_fg,
+            self.selection_bg,
+        ))
     }
 }
 
@@ -458,6 +507,49 @@ fn relative_luminance((r, g, b): (u8, u8, u8)) -> f64 {
     };
 
     0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+}
+
+fn blend_two_colors(a: Color, b: Color, t: f64) -> Color {
+    let t = t.clamp(0.0, 1.0);
+    match (color_to_rgb(a), color_to_rgb(b)) {
+        (Some((ar, ag, ab)), Some((br, bg, bb))) => {
+            let lerp =
+                |x: u8, y: u8| -> u8 { (x as f64 + (y as f64 - x as f64) * t).round() as u8 };
+            Color::Rgb(lerp(ar, br), lerp(ag, bg), lerp(ab, bb))
+        }
+        _ => {
+            if t < 0.5 {
+                a
+            } else {
+                b
+            }
+        }
+    }
+}
+
+fn blend_color_stops(stops: &[(f64, Color)], t: f64) -> Color {
+    if stops.is_empty() {
+        return Color::Reset;
+    }
+
+    let t = t.clamp(0.0, 1.0);
+    if t <= stops[0].0 {
+        return stops[0].1;
+    }
+
+    for pair in stops.windows(2) {
+        let (left_t, left_color) = pair[0];
+        let (right_t, right_color) = pair[1];
+        if t <= right_t {
+            let span = (right_t - left_t).max(f64::EPSILON);
+            let local_t = ((t - left_t) / span).clamp(0.0, 1.0);
+            // Smoothstep interpolation reduces visible seams between segments.
+            let eased_t = local_t * local_t * (3.0 - 2.0 * local_t);
+            return blend_two_colors(left_color, right_color, eased_t);
+        }
+    }
+
+    stops[stops.len() - 1].1
 }
 
 #[cfg(test)]
