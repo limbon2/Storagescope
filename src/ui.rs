@@ -1,5 +1,5 @@
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Wrap};
 
@@ -7,7 +7,7 @@ use crate::model::FsEntryKind;
 use crate::theme::{ThemePalette, current_theme};
 
 pub const HEADER_HEIGHT: u16 = 5;
-pub const FOOTER_HEIGHT: u16 = 5;
+pub const FOOTER_HEIGHT: u16 = 6;
 
 #[derive(Debug, Clone)]
 pub struct RowModel {
@@ -37,6 +37,11 @@ pub struct ViewModel {
     pub rows: Vec<RowModel>,
     pub selected_index: usize,
     pub table_scroll_offset: usize,
+    pub show_name_column: bool,
+    pub show_kind_column: bool,
+    pub show_size_column: bool,
+    pub show_relative_column: bool,
+    pub show_path_column: bool,
     pub warning_line: Option<String>,
     pub message_line: Option<String>,
     pub delete_enabled: bool,
@@ -55,16 +60,17 @@ pub fn render(frame: &mut ratatui::Frame<'_>, model: &ViewModel) {
         Constraint::Length(FOOTER_HEIGHT),
     ])
     .split(frame.area());
+    let header_subtle_style = theme.text_style().add_modifier(Modifier::DIM);
 
     let header = Paragraph::new(vec![
         Line::styled(format!("Path: {}", model.current_root), theme.text_style()),
-        Line::styled(model.disk_line.clone(), theme.muted_style()),
+        Line::styled(model.disk_line.clone(), header_subtle_style),
         Line::styled(
             format!(
                 "Metric: {} | Sort: {} | Status: {}",
                 model.metric, model.sort_mode, model.scan_status
             ),
-            theme.muted_style(),
+            header_subtle_style,
         ),
     ])
     .block(
@@ -94,6 +100,36 @@ fn render_table(
     model: &ViewModel,
     theme: &ThemePalette,
 ) {
+    let visible_column_count = [
+        model.show_name_column,
+        model.show_kind_column,
+        model.show_size_column,
+        model.show_relative_column,
+        model.show_path_column,
+    ]
+    .into_iter()
+    .filter(|enabled| *enabled)
+    .count();
+
+    if visible_column_count == 0 {
+        let empty = Paragraph::new(Line::styled(
+            "All columns are hidden. Use Shift+N/K/S/R/P to show columns.",
+            theme.warning_style(),
+        ))
+        .alignment(Alignment::Center)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(theme.border_style())
+                .title("Children (drill down with Enter)")
+                .title_style(theme.panel_title_style()),
+        )
+        .wrap(Wrap { trim: true });
+
+        frame.render_widget(empty, area);
+        return;
+    }
+
     if model.rows.is_empty() {
         let (text, style) = if let Some(loading_hint) = &model.loading_hint {
             (loading_hint.clone(), theme.loading_style())
@@ -146,35 +182,57 @@ fn render_table(
                 theme.text_style()
             };
 
-            let bar = make_bar_line(row.size_bytes, max_size, 18, theme, selected);
             let name = if row.is_loading {
                 format!("{} [loading]", row.name)
             } else {
                 row.name.clone()
             };
-            let row_cells = vec![
-                Cell::from(name),
-                Cell::from(row.kind.to_string()),
-                Cell::from(format_bytes(row.size_bytes)),
-                Cell::from(bar),
-                Cell::from(row.path_display.clone()),
-            ];
+            let mut row_cells = Vec::with_capacity(visible_column_count);
+            if model.show_name_column {
+                row_cells.push(Cell::from(name));
+            }
+            if model.show_kind_column {
+                row_cells.push(Cell::from(row.kind.to_string()));
+            }
+            if model.show_size_column {
+                row_cells.push(Cell::from(format_bytes(row.size_bytes)));
+            }
+            if model.show_relative_column {
+                let bar = make_bar_line(row.size_bytes, max_size, 18, theme, selected);
+                row_cells.push(Cell::from(bar));
+            }
+            if model.show_path_column {
+                row_cells.push(Cell::from(row.path_display.clone()));
+            }
 
             Row::new(row_cells).style(style)
         });
 
-    let widths = [
-        Constraint::Length(28),
-        Constraint::Length(8),
-        Constraint::Length(12),
-        Constraint::Length(20),
-        Constraint::Min(10),
-    ];
+    let mut widths = Vec::with_capacity(visible_column_count);
+    let mut header_cells = Vec::with_capacity(visible_column_count);
+    if model.show_name_column {
+        widths.push(Constraint::Length(28));
+        header_cells.push(Cell::from(hotkey_label_line("Name", "N", theme)));
+    }
+    if model.show_kind_column {
+        widths.push(Constraint::Length(8));
+        header_cells.push(Cell::from(hotkey_label_line("Kind", "K", theme)));
+    }
+    if model.show_size_column {
+        widths.push(Constraint::Length(12));
+        header_cells.push(Cell::from(hotkey_label_line("Size", "S", theme)));
+    }
+    if model.show_relative_column {
+        widths.push(Constraint::Length(20));
+        header_cells.push(Cell::from(hotkey_label_line("Relative", "R", theme)));
+    }
+    if model.show_path_column {
+        widths.push(Constraint::Min(10));
+        header_cells.push(Cell::from(hotkey_label_line("Path", "P", theme)));
+    }
 
     let table = Table::new(rows, widths)
-        .header(
-            Row::new(vec!["Name", "Kind", "Size", "Relative", "Path"]).style(theme.header_style()),
-        )
+        .header(Row::new(header_cells).style(theme.header_style()))
         .block(
             Block::default()
                 .borders(Borders::ALL)
@@ -215,6 +273,7 @@ fn render_footer(
         quick_actions.push_str(" | d delete");
     }
     lines.push(Line::styled(quick_actions, theme.accent_style()));
+    lines.push(build_column_toggle_line(model, theme));
 
     lines.push(Line::styled(
         format!("Theme source: {}", theme.source()),
@@ -296,6 +355,11 @@ Navigation:\n\
 Scan and View:\n\
   r: rescan current path\n\
   s: cycle sort mode\n\
+  Shift+N: toggle Name column\n\
+  Shift+K: toggle Kind column\n\
+  Shift+S: toggle Size column\n\
+  Shift+R: toggle Relative column\n\
+  Shift+P: toggle Path column\n\
   m: toggle size metric (allocated/apparent)\n\
   /: filter by name/path\n\
   Esc: clear filter or close dialog\n\n\
@@ -326,6 +390,94 @@ Help:\n\
         .wrap(Wrap { trim: true });
 
     frame.render_widget(dialog, area);
+}
+
+fn build_column_toggle_line(model: &ViewModel, theme: &ThemePalette) -> Line<'static> {
+    let mut spans = Vec::new();
+    spans.push(Span::styled("Columns (Shift+): ", theme.accent_style()));
+    append_column_toggle(
+        &mut spans,
+        "N",
+        "Name",
+        model.show_name_column,
+        false,
+        theme,
+    );
+    append_column_toggle(&mut spans, "K", "Kind", model.show_kind_column, true, theme);
+    append_column_toggle(&mut spans, "S", "Size", model.show_size_column, true, theme);
+    append_column_toggle(
+        &mut spans,
+        "R",
+        "Relative",
+        model.show_relative_column,
+        true,
+        theme,
+    );
+    append_column_toggle(&mut spans, "P", "Path", model.show_path_column, true, theme);
+    Line::from(spans)
+}
+
+fn append_column_toggle(
+    spans: &mut Vec<Span<'static>>,
+    key: &str,
+    label: &str,
+    enabled: bool,
+    prepend_separator: bool,
+    theme: &ThemePalette,
+) {
+    if prepend_separator {
+        spans.push(Span::styled(" | ", theme.accent_style()));
+    }
+
+    let label_style = if enabled {
+        theme.accent_style()
+    } else {
+        theme.muted_style()
+    };
+    let state = if enabled { "on" } else { "off" };
+    let key_style = hotkey_key_style(theme);
+    let mut chars = label.chars();
+    let first = chars.next();
+    let rest: String = chars.collect();
+
+    // btop-like cue: highlight the hotkey letter inside the label itself.
+    if let Some(first_char) = first {
+        if first_char.eq_ignore_ascii_case(&key.chars().next().unwrap_or(first_char)) {
+            spans.push(Span::styled(first_char.to_string(), key_style));
+            spans.push(Span::styled(format!("{rest}[{state}]"), label_style));
+            return;
+        }
+    }
+
+    spans.push(Span::styled(key.to_string(), key_style));
+    spans.push(Span::styled(format!(" {label}[{state}]"), label_style));
+}
+
+fn hotkey_key_style(theme: &ThemePalette) -> Style {
+    // Color can clash across themes; add modifiers so this stays visible.
+    theme
+        .warning_style()
+        .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+}
+
+fn hotkey_label_line(label: &str, key: &str, theme: &ThemePalette) -> Line<'static> {
+    let mut spans = Vec::new();
+    let mut chars = label.chars();
+    let first = chars.next();
+    let rest: String = chars.collect();
+    let key_style = hotkey_key_style(theme);
+    let label_style = theme.header_style();
+
+    if let Some(first_char) = first {
+        if first_char.eq_ignore_ascii_case(&key.chars().next().unwrap_or(first_char)) {
+            spans.push(Span::styled(first_char.to_string(), key_style));
+            spans.push(Span::styled(rest, label_style));
+            return Line::from(spans);
+        }
+    }
+
+    spans.push(Span::styled(label.to_string(), label_style));
+    Line::from(spans)
 }
 
 pub fn format_bytes(bytes: u64) -> String {
@@ -386,24 +538,26 @@ fn make_bar_line(
 
     let mut spans = Vec::with_capacity(width);
     if selected && !theme.uses_reverse_selection() {
-        let bg = theme
-            .selected_background_color()
-            .unwrap_or(theme.bar_track_color());
-        let track_style = Style::default().bg(bg);
+        let selection_bg = theme.selected_background_color().unwrap_or_default();
+        let track_style = Style::default()
+            .fg(theme.bar_track_color())
+            .bg(selection_bg);
 
         for idx in 0..width {
             if idx < full_blocks {
-                let fill_style = Style::default().bg(theme.bar_fill_color(position_ratio(idx)));
-                spans.push(Span::styled(" ", fill_style));
+                let fill_style = Style::default()
+                    .fg(theme.bar_fill_color(position_ratio(idx)))
+                    .bg(selection_bg);
+                spans.push(Span::styled("█", fill_style));
             } else if idx == full_blocks && partial_block > 0 && full_blocks < width {
                 let fill = theme.bar_fill_color(position_ratio(idx));
-                let partial_style = Style::default().fg(fill).bg(bg);
+                let partial_style = Style::default().fg(fill).bg(selection_bg);
                 spans.push(Span::styled(
                     PARTIALS[partial_block - 1].to_string(),
                     partial_style,
                 ));
             } else {
-                spans.push(Span::styled(" ", track_style));
+                spans.push(Span::styled("·", track_style));
             }
         }
 

@@ -77,6 +77,73 @@ enum DeleteDialog {
     TypePhrase { target: PathBuf, typed: String },
 }
 
+#[derive(Debug, Clone, Copy)]
+enum TableColumn {
+    Name,
+    Kind,
+    Size,
+    Relative,
+    Path,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ColumnVisibility {
+    name: bool,
+    kind: bool,
+    size: bool,
+    relative: bool,
+    path: bool,
+}
+
+impl ColumnVisibility {
+    fn all_visible() -> Self {
+        Self {
+            name: true,
+            kind: true,
+            size: true,
+            relative: true,
+            path: true,
+        }
+    }
+
+    fn is_visible(self, column: TableColumn) -> bool {
+        match column {
+            TableColumn::Name => self.name,
+            TableColumn::Kind => self.kind,
+            TableColumn::Size => self.size,
+            TableColumn::Relative => self.relative,
+            TableColumn::Path => self.path,
+        }
+    }
+
+    fn set_visible(&mut self, column: TableColumn, visible: bool) {
+        match column {
+            TableColumn::Name => self.name = visible,
+            TableColumn::Kind => self.kind = visible,
+            TableColumn::Size => self.size = visible,
+            TableColumn::Relative => self.relative = visible,
+            TableColumn::Path => self.path = visible,
+        }
+    }
+
+    fn visible_count(self) -> usize {
+        [self.name, self.kind, self.size, self.relative, self.path]
+            .into_iter()
+            .filter(|visible| *visible)
+            .count()
+    }
+
+    fn label(column: TableColumn) -> &'static str {
+        match column {
+            TableColumn::Name => "Name",
+            TableColumn::Kind => "Kind",
+            TableColumn::Size => "Size",
+            TableColumn::Relative => "Relative",
+            TableColumn::Path => "Path",
+        }
+    }
+}
+
 pub struct App {
     config: Config,
     startup_root: PathBuf,
@@ -86,6 +153,7 @@ pub struct App {
     children: HashMap<PathBuf, Vec<PathBuf>>,
     selected_index: usize,
     table_scroll_offset: usize,
+    column_visibility: ColumnVisibility,
     sort_mode: SortMode,
     metric: SizeMetric,
     filter: String,
@@ -119,6 +187,7 @@ impl App {
             children: HashMap::new(),
             selected_index: 0,
             table_scroll_offset: 0,
+            column_visibility: ColumnVisibility::all_visible(),
             filter: String::new(),
             filter_mode: false,
             warnings: Vec::new(),
@@ -464,6 +533,11 @@ impl App {
                 self.sort_mode = self.sort_mode.cycle();
                 self.ensure_selection_in_bounds();
             }
+            KeyCode::Char('N') => self.toggle_column(TableColumn::Name),
+            KeyCode::Char('K') => self.toggle_column(TableColumn::Kind),
+            KeyCode::Char('S') => self.toggle_column(TableColumn::Size),
+            KeyCode::Char('R') => self.toggle_column(TableColumn::Relative),
+            KeyCode::Char('P') => self.toggle_column(TableColumn::Path),
             KeyCode::Char('m') => self.metric = self.metric.toggle(),
             KeyCode::Char('r') => self.start_scan_at(self.current_root.clone()),
             KeyCode::Char('/') => self.filter_mode = true,
@@ -486,6 +560,23 @@ impl App {
         }
 
         Ok(())
+    }
+
+    fn toggle_column(&mut self, column: TableColumn) {
+        let currently_visible = self.column_visibility.is_visible(column);
+        if currently_visible && self.column_visibility.visible_count() == 1 {
+            self.message = Some("At least one column must stay visible".to_string());
+            return;
+        }
+
+        self.column_visibility
+            .set_visible(column, !currently_visible);
+
+        let state = if currently_visible { "hidden" } else { "shown" };
+        self.message = Some(format!(
+            "Column {} {state}",
+            ColumnVisibility::label(column)
+        ));
     }
 
     fn handle_filter_key(&mut self, key: KeyEvent) {
@@ -731,6 +822,11 @@ impl App {
             rows,
             selected_index: self.selected_index,
             table_scroll_offset: self.table_scroll_offset,
+            show_name_column: self.column_visibility.name,
+            show_kind_column: self.column_visibility.kind,
+            show_size_column: self.column_visibility.size,
+            show_relative_column: self.column_visibility.relative,
+            show_path_column: self.column_visibility.path,
             warning_line: self.warnings.last().cloned(),
             message_line: self.message.clone(),
             delete_enabled: !self.config.no_delete,
