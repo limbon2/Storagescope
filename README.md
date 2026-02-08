@@ -41,5 +41,9 @@ For very large scans (`/`, large home dirs), keep `--show-files false` and optio
 - `r`: rescan current path
 - `/`: type filter
 - `?` / `F1`: open help modal
+- mouse wheel: move selection
+- left click: select row
+- double left click: open selected directory
+- right click in table: go to parent
 - `d`: delete selected entry (unless `--no-delete`)
 - `q`: quit

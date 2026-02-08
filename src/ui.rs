@@ -192,7 +192,7 @@ fn render_footer(
     }
 
     lines.push(Line::styled(
-        "Legend: ?/F1 help | q quit | j/k move | Enter open | h/back up | / filter",
+        "Legend: ?/F1 help | q quit | j/k move | Enter open | h/back up | / filter | wheel scroll | click select",
         theme.accent_style(),
     ));
     let mut quick_actions = String::from("Actions: s sort | m metric | r rescan");
@@ -284,6 +284,11 @@ Scan and View:\n\
   m: toggle size metric (allocated/apparent)\n\
   /: filter by name/path\n\
   Esc: clear filter or close dialog\n\n\
+Mouse:\n\
+  Wheel: scroll selection\n\
+  Left click: select row\n\
+  Double left click: open selected directory\n\
+  Right click in table: go to parent directory\n\n\
 Safety:\n\
   {delete_line}\n\n\
 Loading Indicators:\n\

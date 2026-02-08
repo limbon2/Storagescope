@@ -205,8 +205,9 @@ impl ThemePalette {
         if self.reverse_selection {
             Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD)
         } else {
+            let selection_fg = adaptive_selected_foreground(self.selection_fg, self.selection_bg);
             Style::default()
-                .fg(self.selection_fg)
+                .fg(selection_fg)
                 .bg(self.selection_bg)
                 .add_modifier(Modifier::BOLD)
         }
@@ -354,9 +355,114 @@ fn detect_light_background() -> Option<bool> {
     Some(matches!(last, 7 | 15))
 }
 
+fn adaptive_selected_foreground(preferred_fg: Color, background: Color) -> Color {
+    let Some(bg_rgb) = color_to_rgb(background) else {
+        return preferred_fg;
+    };
+
+    let preferred_contrast = color_to_rgb(preferred_fg)
+        .map(|fg_rgb| contrast_ratio(fg_rgb, bg_rgb))
+        .unwrap_or(0.0);
+
+    // Use the theme-provided foreground when it is already readable.
+    if preferred_contrast >= 4.5 {
+        return preferred_fg;
+    }
+
+    let black = Color::Rgb(0, 0, 0);
+    let white = Color::Rgb(255, 255, 255);
+    let black_contrast = contrast_ratio((0, 0, 0), bg_rgb);
+    let white_contrast = contrast_ratio((255, 255, 255), bg_rgb);
+
+    if black_contrast >= white_contrast {
+        black
+    } else {
+        white
+    }
+}
+
+fn color_to_rgb(color: Color) -> Option<(u8, u8, u8)> {
+    match color {
+        Color::Rgb(r, g, b) => Some((r, g, b)),
+        Color::Black => Some((0, 0, 0)),
+        Color::DarkGray => Some((85, 85, 85)),
+        Color::Gray => Some((170, 170, 170)),
+        Color::White => Some((255, 255, 255)),
+        Color::Red => Some((128, 0, 0)),
+        Color::Green => Some((0, 128, 0)),
+        Color::Yellow => Some((128, 128, 0)),
+        Color::Blue => Some((0, 0, 128)),
+        Color::Magenta => Some((128, 0, 128)),
+        Color::Cyan => Some((0, 128, 128)),
+        Color::LightRed => Some((255, 0, 0)),
+        Color::LightGreen => Some((0, 255, 0)),
+        Color::LightYellow => Some((255, 255, 0)),
+        Color::LightBlue => Some((0, 0, 255)),
+        Color::LightMagenta => Some((255, 0, 255)),
+        Color::LightCyan => Some((0, 255, 255)),
+        Color::Indexed(index) => Some(indexed_ansi_to_rgb(index)),
+        Color::Reset => None,
+    }
+}
+
+fn indexed_ansi_to_rgb(index: u8) -> (u8, u8, u8) {
+    if index < 16 {
+        return match index {
+            0 => (0, 0, 0),
+            1 => (128, 0, 0),
+            2 => (0, 128, 0),
+            3 => (128, 128, 0),
+            4 => (0, 0, 128),
+            5 => (128, 0, 128),
+            6 => (0, 128, 128),
+            7 => (192, 192, 192),
+            8 => (128, 128, 128),
+            9 => (255, 0, 0),
+            10 => (0, 255, 0),
+            11 => (255, 255, 0),
+            12 => (0, 0, 255),
+            13 => (255, 0, 255),
+            14 => (0, 255, 255),
+            _ => (255, 255, 255),
+        };
+    }
+
+    if index <= 231 {
+        let i = index - 16;
+        let r = i / 36;
+        let g = (i % 36) / 6;
+        let b = i % 6;
+        let to_value = |v: u8| if v == 0 { 0 } else { 55 + v * 40 };
+        return (to_value(r), to_value(g), to_value(b));
+    }
+
+    let gray = 8 + (index - 232) * 10;
+    (gray, gray, gray)
+}
+
+fn contrast_ratio(a: (u8, u8, u8), b: (u8, u8, u8)) -> f64 {
+    let l1 = relative_luminance(a);
+    let l2 = relative_luminance(b);
+    let (hi, lo) = if l1 >= l2 { (l1, l2) } else { (l2, l1) };
+    (hi + 0.05) / (lo + 0.05)
+}
+
+fn relative_luminance((r, g, b): (u8, u8, u8)) -> f64 {
+    let channel = |value: u8| {
+        let c = value as f64 / 255.0;
+        if c <= 0.03928 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+
+    0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{parse_color_assignments, parse_hex_color};
+    use super::{adaptive_selected_foreground, parse_color_assignments, parse_hex_color};
     use ratatui::style::Color;
 
     #[test]
@@ -380,5 +486,17 @@ mod tests {
         assert_eq!(parsed.get("accent"), Some(&Color::Rgb(0x7a, 0xa2, 0xf7)));
         assert_eq!(parsed.get("color1"), Some(&Color::Rgb(0xf7, 0x76, 0x8e)));
         assert!(parsed.get("ignored").is_none());
+    }
+
+    #[test]
+    fn adaptive_selection_uses_dark_text_on_light_bg() {
+        let fg = adaptive_selected_foreground(Color::Rgb(255, 255, 255), Color::Rgb(170, 200, 255));
+        assert_eq!(fg, Color::Rgb(0, 0, 0));
+    }
+
+    #[test]
+    fn adaptive_selection_uses_light_text_on_dark_bg() {
+        let fg = adaptive_selected_foreground(Color::Rgb(0, 0, 0), Color::Rgb(20, 30, 80));
+        assert_eq!(fg, Color::Rgb(255, 255, 255));
     }
 }
