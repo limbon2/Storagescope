@@ -5,4 +5,5 @@ pub mod errors;
 pub mod model;
 pub mod platform;
 pub mod scanner;
+pub mod theme;
 pub mod ui;

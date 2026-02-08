@@ -13,6 +13,8 @@ TreeSize-like terminal disk usage analyzer.
 - Same-filesystem traversal by default.
 - Navigation reuses in-memory scan data instead of rescanning on every folder change.
 - Live loading indicators in table/footer while scan results are still streaming in.
+- Auto-theming: picks colors from Omarchy current theme when available, otherwise uses terminal-adaptive fallback.
+- Live theme reload: updates colors while running when Omarchy theme changes.
 - Guarded delete flow (`DELETE` typed confirmation).
 
 ## Run
