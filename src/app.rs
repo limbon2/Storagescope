@@ -22,11 +22,13 @@ use crate::model::{FsEntryKind, NodeSummary, ScanEvent, ScanProgress, SizeMetric
 use crate::scanner::{ScanSession, start_scan};
 use crate::ui::{DialogStateView, RowModel, ViewModel};
 
-const MAX_EVENTS_PER_TICK: usize = 2048;
+const MAX_EVENTS_PER_TICK: usize = 8192;
 const SPINNER_FRAMES: [char; 4] = ['|', '/', '-', '\\'];
 const MOUSE_DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(350);
 const MOUSE_SCROLL_STEP: isize = 1;
 const MOUSE_SCROLL_MIN_INTERVAL: Duration = Duration::from_millis(35);
+const POLL_INTERVAL_WHILE_SCANNING: Duration = Duration::from_millis(24);
+const POLL_INTERVAL_IDLE: Duration = Duration::from_millis(80);
 
 #[derive(Debug, Clone)]
 enum ScanState {
@@ -170,9 +172,13 @@ impl App {
                 .draw(|frame| crate::ui::render(frame, &model))
                 .map_err(|error| AppError::Terminal(error.to_string()))?;
 
-            if event::poll(Duration::from_millis(80))
-                .map_err(|error| AppError::Terminal(error.to_string()))?
-            {
+            let poll_interval = if self.scan_state.is_scanning() {
+                POLL_INTERVAL_WHILE_SCANNING
+            } else {
+                POLL_INTERVAL_IDLE
+            };
+
+            if event::poll(poll_interval).map_err(|error| AppError::Terminal(error.to_string()))? {
                 match event::read().map_err(|error| AppError::Terminal(error.to_string()))? {
                     Event::Key(key) => {
                         if key.kind == KeyEventKind::Press {
