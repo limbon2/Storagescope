@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 description = "TreeSize-like terminal disk usage analyzer"
+readme = "README.md"
+repository = "https://github.com/limbon2/Storagescope"
+homepage = "https://github.com/limbon2/Storagescope"
+documentation = "https://github.com/limbon2/Storagescope#readme"
+exclude = ["screenshot.png"]
 
 [dependencies]
 anyhow = "1.0.100"
