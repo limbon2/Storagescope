@@ -629,7 +629,7 @@ impl App {
                     }
                     KeyCode::Enter => {
                         if typed == "DELETE" {
-                            match delete_target(target, &self.current_root) {
+                            match delete_target(target, &self.startup_root) {
                                 Ok(()) => {
                                     self.message =
                                         Some(format!("Deleted {}", target.to_string_lossy()));
@@ -682,11 +682,15 @@ impl App {
             return;
         }
 
-        if let Some(parent) = self.current_root.parent() {
-            self.current_root = parent.to_path_buf();
-            self.selected_index = 0;
-            self.ensure_selection_in_bounds();
-        }
+        let next_root = self
+            .current_root
+            .parent()
+            .filter(|parent| parent.starts_with(&self.startup_root))
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| self.startup_root.clone());
+        self.current_root = next_root;
+        self.selected_index = 0;
+        self.ensure_selection_in_bounds();
     }
 
     fn selected_node(&self) -> Option<NodeSummary> {
@@ -930,7 +934,36 @@ fn compute_scroll_offset(
 
 #[cfg(test)]
 mod tests {
-    use super::compute_scroll_offset;
+    use std::fs;
+    use std::path::PathBuf;
+
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use tempfile::TempDir;
+
+    use crate::cli::Config;
+    use crate::model::{ScanOptions, SizeMetric};
+
+    use super::{App, DeleteDialog, compute_scroll_offset};
+
+    fn test_config(startup_root: PathBuf) -> Config {
+        Config {
+            startup_root: startup_root.clone(),
+            scan_options: ScanOptions {
+                root: startup_root,
+                one_file_system: true,
+                follow_symlinks: false,
+                show_hidden: true,
+                show_files: true,
+                max_depth: None,
+            },
+            initial_metric: SizeMetric::Allocated,
+            no_delete: false,
+        }
+    }
+
+    fn enter_key() -> KeyEvent {
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
+    }
 
     #[test]
     fn keeps_selection_visible_when_moving_down() {
@@ -950,5 +983,56 @@ mod tests {
     fn handles_zero_visible_rows() {
         assert_eq!(compute_scroll_offset(0, 7, 10, 0), 7);
         assert_eq!(compute_scroll_offset(3, 2, 0, 0), 0);
+    }
+
+    #[test]
+    fn delete_dialog_refuses_startup_root_even_when_browsing_child() {
+        let temp = TempDir::new().expect("temp dir");
+        let startup = temp.path().join("startup");
+        let child = startup.join("child");
+        fs::create_dir_all(&child).expect("create child");
+        let startup = fs::canonicalize(startup).expect("canonical startup");
+        let child = fs::canonicalize(child).expect("canonical child");
+
+        let mut app = App::new(test_config(startup.clone()));
+        app.current_root = child;
+        app.delete_dialog = DeleteDialog::TypePhrase {
+            target: startup.clone(),
+            typed: "DELETE".to_string(),
+        };
+
+        let consumed = app
+            .handle_delete_dialog_key(&enter_key())
+            .expect("handle key");
+        assert!(consumed);
+        assert!(
+            app.message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("refusing to delete startup root")
+        );
+        assert!(startup.exists());
+    }
+
+    #[test]
+    fn navigate_to_parent_clamps_to_startup_root() {
+        let temp = TempDir::new().expect("temp dir");
+        let startup = temp.path().join("startup");
+        let outside_child = temp.path().join("outside").join("nested");
+        fs::create_dir_all(&startup).expect("create startup");
+        fs::create_dir_all(&outside_child).expect("create outside child");
+        let startup = fs::canonicalize(startup).expect("canonical startup");
+        let outside_child = fs::canonicalize(outside_child).expect("canonical outside child");
+
+        let mut app = App::new(test_config(startup.clone()));
+        app.current_root = outside_child;
+        app.selected_index = 4;
+        app.table_scroll_offset = 2;
+
+        app.navigate_to_parent();
+
+        assert_eq!(app.current_root, startup);
+        assert_eq!(app.selected_index, 0);
+        assert_eq!(app.table_scroll_offset, 0);
     }
 }
