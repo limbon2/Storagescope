@@ -11,7 +11,7 @@ documentation = "https://github.com/limbon2/Storagescope#readme"
 exclude = ["screenshot.png"]
 
 [dependencies]
-anyhow = "1.0.100"
+anyhow = "1.0.102"
 clap = { version = "4.5.53", features = ["derive"] }
 crossbeam-channel = "0.5.15"
 crossterm = "0.29.0"
